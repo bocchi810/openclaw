@@ -15,9 +15,13 @@ const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
 }));
 const { watchMock } = vi.hoisted(() => ({
   watchMock: vi.fn(() => {
-    const watcher = new EventEmitter();
+    const watcher = new EventEmitter() as EventEmitter & {
+      watchedEntries: Record<string, string[]>;
+    };
+    watcher.watchedEntries = {};
     return Object.assign(watcher, {
       close: vi.fn(async () => undefined),
+      getWatched: vi.fn(() => watcher.watchedEntries),
     });
   }),
 }));
@@ -534,8 +538,8 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager({ mode: "full" });
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const watcher = watchMock.mock.results[0]?.value as {
-      emit: (event: string, ...args: unknown[]) => boolean;
+    const watcher = watchMock.mock.results[0]?.value as EventEmitter & {
+      watchedEntries: Record<string, string[]>;
     };
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
@@ -549,6 +553,11 @@ describe("QmdMemoryManager", () => {
     expect(watchOptions.ignored?.(path.join(workspaceDir, "dist", "note.md"))).toBe(true);
     expect(watchOptions.ignored?.(path.join(workspaceDir, "build", "note.md"))).toBe(true);
     expect(watchOptions.ignored?.(path.join(workspaceDir, "notes.md"))).toBe(false);
+    watcher.watchedEntries = {
+      [workspaceDir]: Array.from({ length: 2_001 }, (_value, index) => `${index}.md`),
+    };
+    watcher.emit("ready");
+    expectMockMessageContains(logWarnMock, "Memory file watching is tracking 2002 paths.");
 
     const notesPath = path.join(workspaceDir, "notes.md");
     await fs.writeFile(notesPath, "hello");
@@ -740,6 +749,7 @@ describe("QmdMemoryManager", () => {
   });
 
   it("times out collection bootstrap commands", async () => {
+    vi.useFakeTimers();
     cfg = {
       ...cfg,
       memory: {
@@ -764,7 +774,15 @@ describe("QmdMemoryManager", () => {
       return createMockChild();
     });
 
-    const { manager } = await createManager({ mode: "full" });
+    const managerPromise = createManager({ mode: "full" });
+    await waitUntil(() =>
+      spawnMock.mock.calls.some((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args[0] === "collection" && args[1] === "list";
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(15);
+    const { manager } = await managerPromise;
     const status = manager.status();
     expect(status.backend).toBe("qmd");
     expect(status.requestedProvider).toBe("qmd");
@@ -4396,6 +4414,7 @@ describe("QmdMemoryManager", () => {
   });
 
   it("retries boot update when qmd reports a retryable lock error", async () => {
+    vi.useFakeTimers();
     cfg = {
       ...cfg,
       memory: {
@@ -4429,26 +4448,14 @@ describe("QmdMemoryManager", () => {
       return createMockChild();
     });
 
-    const nativeSetTimeout = globalThis.setTimeout;
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-      handler: TimerHandler,
-      timeout?: number,
-      ...args: unknown[]
-    ) => {
-      if (typeof timeout === "number" && timeout >= 500) {
-        return nativeSetTimeout(handler, 1, ...args);
-      }
-      return nativeSetTimeout(handler, timeout, ...args);
-    }) as typeof globalThis.setTimeout);
+    const managerPromise = createManager({ mode: "full" });
+    await waitUntil(() => updateCalls === 1);
+    await vi.advanceTimersByTimeAsync(500);
+    await waitUntil(() => updateCalls === 2);
+    const { manager } = await managerPromise;
 
-    const { manager } = await createManager({ mode: "full" });
-
-    try {
-      expect(updateCalls).toBe(2);
-      await manager.close();
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
+    expect(updateCalls).toBe(2);
+    await manager.close();
   });
 
   it("succeeds on qmd update even when stdout exceeds the output cap", async () => {

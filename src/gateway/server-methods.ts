@@ -277,7 +277,15 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadChannelsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["chat.history", "chat.message.get", "chat.abort", "chat.send", "chat.inject"],
+    methods: [
+      "chat.history",
+      "chat.startup",
+      "chat.metadata",
+      "chat.message.get",
+      "chat.abort",
+      "chat.send",
+      "chat.inject",
+    ],
     loadHandlers: loadChatHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -444,6 +452,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "skills.proposals.create",
       "skills.proposals.update",
       "skills.proposals.revise",
+      "skills.proposals.requestRevision",
       "skills.proposals.apply",
       "skills.proposals.reject",
       "skills.proposals.quarantine",
